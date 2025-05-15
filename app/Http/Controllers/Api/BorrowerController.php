@@ -1,135 +1,68 @@
 <?php
 
-namespace App\Http\Controllers\Api;
+namespace App\Http\Controllers;
 
-use App\Http\Controllers\Controller;
-use App\Models\Borrower; 
-use Illuminate\Http\Request;
 use App\Http\Resources\BorrowerResource;
-use Illuminate\Support\Facades\Validator;
+use App\Models\Book;
+use App\Models\Borrower;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth;
+use Carbon\Carbon;
 
-class BorrowerController extends Controller
+class BorrowController extends Controller
 {
-    public function index()
+    // Borrow a book
+    public function borrow(Request $request, $bookId)
     {
-        $borrower = Borrower::all(); 
-        
-        if($borrower->isEmpty()) {
-            return response()->json(['message' => 'No borrower found'], 200);
-        }
-        
-        return BorrowerResource::collection($borrower);
-    }
+        $user = Auth::user();
 
-    public function store(Request $request)
-    {
-        $validator = Validator::make($request->all(), [
-            "student_name" => "required|string",
-            "block" => "required|string",
-            "year_level" => "required|string",
-            "book_name" => "required|string",
-            "date_borrowed" => "required|date",
-            "date_return" => "required|date",
+        $book = Book::findOrFail($bookId);
+
+        if ($book->available_copies < 1) {
+            return response()->json(['message' => 'No available copies'], 400);
+        }
+
+        $dateBorrowed = Carbon::now();
+        $dueDate = $dateBorrowed->copy()->addDays(14); // 2 weeks due date
+
+        $borrow = Borrower::create([
+            'user_id' => $user->id,
+            'book_id' => $book->id,
+            'date_borrowed' => $dateBorrowed,
+            'due_date' => $dueDate,
+            'date_return' => null,
         ]);
 
-        if($validator->fails()) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Validation errors',
-                'errors' => $validator->errors()    
-            ], 422);
-        }
+        $book->decrement('available_copies');
 
-        $borrower = Borrower::create([
-            'student_name' => $request->student_name,
-            'block' => $request->block,
-            'year_level' => $request->year_level,
-            'book_name' => $request->book_name,
-            'date_borrowed' => $request->date_borrowed,
-            'date_return' => $request->date_return,
-        ]);
-
-        return response()->json([
-            'success' => true,
-            'message' => 'Borrower created successfully',
-            'data' => new BorrowerResource($borrower)
-        ], 201); // Changed to 201 for created
+        return new BorrowerResource($borrow);
     }
 
-    public function show($id)
+    // Return a book
+    public function returnBook(Request $request, $borrowId)
     {
-        $borrower = Borrower::find($id);
-        
-        if(!$borrower) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Borrower not found'
-            ], 404);
+        $user = Auth::user();
+
+        $borrow = Borrower::where('id', $borrowId)->where('user_id', $user->id)->firstOrFail();
+
+        if ($borrow->date_return) {
+            return response()->json(['message' => 'Book already returned'], 400);
         }
-        
-        return new BorrowerResource($borrower);
+
+        $borrow->date_return = Carbon::now();
+        $borrow->save();
+
+        $book = $borrow->book;
+        $book->increment('available_copies');
+
+        return new BorrowerResource($borrow);
     }
 
-    public function update(Request $request, $id)
+    // View user's borrow history
+    public function myBorrows()
     {
-        $borrower = Borrower::find($id);
-        
-        if(!$borrower) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Borrower not found'
-            ], 404);
-        }
-
-        $validator = Validator::make($request->all(), [
-            "student_name" => "required|string",
-            "block" => "required|string",
-            "year_level" => "required|string",
-            "book_name" => "required|string",
-            "date_borrowed" => "required|date",
-            "date_return" => "required|date",
-        ]);
-
-        if($validator->fails()) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Validation errors',
-                'errors' => $validator->errors()    
-            ], 422);
-        }
-
-        $borrower->update([
-           'student_name' => $request->student_name,
-            'block' => $request->block,
-            'year_level' => $request->year_level,
-            'book_name' => $request->book_name,
-            'date_borrowed' => $request->date_borrowed,
-            'date_return' => $request->date_return,
-        ]);
-
-        return response()->json([
-            'success' => true,
-            'message' => 'Borrower updated successfully',
-            'data' => new BorrowerResource($borrower)
-        ], 200);
-    }
-
-    public function destroy($id)
-    {
-        $borrower = Borrower::find($id);
-        
-        if(!$borrower) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Borrower not found'
-            ], 404);
-        }
-
-        $borrower->delete();
-        
-        return response()->json([
-            'success' => true,
-            'message' => 'Borrower deleted successfully'
-        ], 200);
+        $user = Auth::user();
+        $borrows = $user->borrowings()->with('book')->get();
+        return BorrowerResource::collection($borrows);
     }
 }

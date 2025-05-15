@@ -1,15 +1,29 @@
 <?php
 
-use App\Http\Controllers\Api\BookController;
-use App\Http\Controllers\Api\StudentsController;
-use App\Http\Controllers\Api\BorrowerController;
-use Illuminate\Http\Request;
+// routes/api.php
+
+use App\Http\Controllers\BookController;
+use App\Http\Controllers\BorrowController;
 use Illuminate\Support\Facades\Route;
 
-route::apiResource('books', BookController::class);
-route::apiResource('students', StudentsController::class);
-route::apiResource('borrower', BorrowerController::class);
+Route::middleware('auth:sanctum')->group(function () {
 
-Route::get('/user', function (Request $request) {
-    return $request->user();
-})->middleware('auth:sanctum');
+    // Browse books (all authenticated users)
+    Route::get('/books', [BookController::class, 'index']);
+
+    // Borrow books
+    Route::post('/books/{book}/borrow', [BorrowController::class, 'borrow']);
+
+    // Return borrowed book
+    Route::post('/borrowers/{borrow}/return', [BorrowController::class, 'returnBook']);
+
+    // View own borrowings
+    Route::get('/my-borrows', [BorrowController::class, 'myBorrows']);
+
+    // Admin only (middleware applied in controller or here)
+    Route::middleware('admin')->group(function () {
+        Route::post('/books', [BookController::class, 'store']);
+        Route::put('/books/{book}', [BookController::class, 'update']);
+        Route::delete('/books/{book}', [BookController::class, 'destroy']);
+    });
+});

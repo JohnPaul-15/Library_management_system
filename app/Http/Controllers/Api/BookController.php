@@ -1,107 +1,77 @@
 <?php
 
-namespace App\Http\Controllers\Api;
+namespace App\Http\Controllers;
 
-use App\Models\Book;
-use App\Http\Controllers\Controller;
-use Illuminate\Http\Request;
 use App\Http\Resources\BookResource;
-use Illuminate\Support\Facades\Validator;
+use App\Models\Book;
+use Illuminate\Http\Request;
 
 class BookController extends Controller
 {
+    // List all books - browsing
     public function index()
     {
-        $books = Book::get();
-        if($books)
-        {
-            return BookResource::collection($books);
-        }
-        else 
-        {
-            return response()->json(['message' => 'No books found'], 200);
-        }
+        $books = Book::all();
+        return BookResource::collection($books);
     }
+
+    // Admin can create book
     public function store(Request $request)
     {
-        $validator = Validator::make($request->all(),[
-            "title" => "required",
-            "author" => "required",
-            "publisher" => "required",
-        ]);
-        if($validator->fails()){
-            return response()->json([
-            'message' =>'All fields are mandatory',
-            'error' => $validator->errors(),    
-            ],422);
-        }
-        $request->validate([
-            'title' => 'required',
-            'author' => 'required',
-            'publisher' => 'required',
+        $this->authorize('adminOnly');
+
+        $validated = $request->validate([
+            'title' => 'required|string',
+            'author' => 'required|string',
+            'publisher' => 'required|string',
+            'copies' => 'required|integer|min:1',
         ]);
 
-        $books = Book::create([
-            'title' => $request->title,
-            'author' => $request->author,
-            'publisher' => $request->publisher,
-        ]);
+        $validated['available_copies'] = $validated['copies'];
 
-        return response()->json([
-            'message' => 'Book created successfully',
-            'data' => new BookResource($books)
-        ], 200);
+        $book = Book::create($validated);
+
+        return new BookResource($book);
     }
 
-    public function show(Book $book)
-    {
-        if($book)
-        {
-            return new BookResource($book);
-        }
-        else 
-        {
-            return response()->json(['message' => 'Book not found'], 404);
-        }
-    }
-
-
+    // Admin can update book details
     public function update(Request $request, Book $book)
     {
-        $validator = Validator::make($request->all(),[
-            "title" => "required",
-            "author" => "required",
-            "publisher" => "required",
+        $this->authorize('adminOnly');
+
+        $validated = $request->validate([
+            'title' => 'sometimes|string',
+            'author' => 'sometimes|string',
+            'publisher' => 'sometimes|string',
+            'copies' => 'sometimes|integer|min:1',
         ]);
-        if($validator->fails()){
-            return response()->json([
-            'message' =>'All fields are mandatory',
-            'error' => $validator->errors(),    
-            ],422);
+
+        if (isset($validated['copies'])) {
+            $difference = $validated['copies'] - $book->copies;
+            $book->available_copies += $difference;
         }
-        $book->update([
-            'title' => 'required',
-            'author' => 'required',
-            'publisher' => 'required',
-        ]);
+        
 
-        $books = Book::create([
-            'title' => $request->title,
-            'author' => $request->author,
-            'publisher' => $request->publisher,
-        ]);
+        $book->update($validated);
 
-        return response()->json([
-            'message' => 'Book updated successfully',
-            'data' => new BookResource($books)
-        ], 200);
+        return new BookResource($book);
     }
 
+    // Admin can delete book
     public function destroy(Book $book)
     {
+        $this->authorize('adminOnly');
+
         $book->delete();
-        return response()->json([
-            'message' => 'Book deleted successfully',
-        ], 200);
+
+        return response()->json(['message' => 'Book deleted']);
     }
+    // In BookController for admin-only routes
+    public function __construct()
+    {
+        $this->middleware('auth:sanctum');
+        $this->middleware('admin')->only(['store', 'update', 'destroy']);
+    }
+
+    
 }
