@@ -2,22 +2,24 @@
 
 namespace App\Models;
 
-use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 
 class Borrower extends Model
 {
-    use HasFactory;
+    protected $fillable = ['user_id', 'book_id', 'date_borrowed', 'due_date', 'date_return'];
 
-    protected $table = 'borrower';
+    public function user()
+    {
+        return $this->belongsTo(User::class);
+    }
 
-    protected $fillable = [
-        'student_name',
-        'block',
-        'year_level',
-        'email',
-        'book_name',
-        'date_borrowed',
-        'date_return',
-    ];
+    public function book()
+    {
+        return $this->belongsTo(Book::class);
+    }
+
+    public function isReturned()
+    {
+        return $this->date_return !== null;
+    }
 }

@@ -2,18 +2,14 @@
 
 namespace App\Models;
 
-use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 
 class Book extends Model
 {
-    use HasFactory;
+    protected $fillable = ['title', 'author', 'publisher', 'copies', 'available_copies'];
 
-    protected $table = 'books';
-
-    protected $fillable = [
-        'title',
-        'author',
-        'publisher',
-    ];
+    public function borrowers()
+    {
+        return $this->hasMany(Borrower::class);
+    }
 }
