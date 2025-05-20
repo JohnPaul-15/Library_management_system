@@ -6,18 +6,31 @@ use App\Http\Controllers\Api\BorrowerController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\AuthController;
+use App\Http\Controllers\Api\UserController;
 
-route::post('/register', [AuthController::class, 'register']);
-route::post('/login', [AuthController::class, 'login']);
+// Public routes
+Route::post('/register', [AuthController::class, 'register']);
+Route::post('/login', [AuthController::class, 'login']);
 
-route::group(['middleware' => 'auth:sanctum'], function () {
-    route::middleware('auth:sanctum')->get('/profile', [AuthController::class, 'profile']);
-    route::get('/logout', [AuthController::class, 'logout']);
+// Protected routes
+Route::middleware('auth:sanctum')->group(function () {
+    // Auth routes
+    Route::get('/profile', [UserController::class, 'profile']);
+    Route::put('/profile', [UserController::class, 'updateProfile']);
+    Route::get('/logout', [AuthController::class, 'logout']);
+
+    // Resource routes
+    Route::apiResource('books', BookController::class);
+    Route::apiResource('students', StudentsController::class);
+    Route::apiResource('borrower', BorrowerController::class);
+
+    // Admin only routes
+    Route::middleware('can:viewAny,App\Models\User')->group(function () {
+        Route::get('/users', [UserController::class, 'index']);
+        Route::get('/users/{user}', [UserController::class, 'show']);
+        Route::delete('/users/{user}', [UserController::class, 'destroy']);
+    });
 });
-
-route::apiResource('books', BookController::class);
-route::apiResource('students', StudentsController::class);
-route::apiResource('borrower', BorrowerController::class);
 
 Route::get('/user', function (Request $request) {
     return $request->user();

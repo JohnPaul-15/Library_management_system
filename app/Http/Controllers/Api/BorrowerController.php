@@ -3,16 +3,19 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
-use App\Models\Borrower; 
+use App\Models\Borrower;
+use App\Models\Book;
 use Illuminate\Http\Request;
 use App\Http\Resources\BorrowerResource;
 use Illuminate\Support\Facades\Validator;
+use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Log;
 
 class BorrowerController extends Controller
 {
     public function index()
     {
-        $borrower = Borrower::all(); 
+        $borrower = Borrower::with(['user', 'book'])->get();
         
         if($borrower->isEmpty()) {
             return response()->json(['message' => 'No borrower found'], 200);
@@ -23,13 +26,25 @@ class BorrowerController extends Controller
 
     public function store(Request $request)
     {
+        // Debug authentication
+        Log::info('Auth check:', [
+            'isAuthenticated' => Auth::check(),
+            'user' => Auth::user(),
+            'userId' => Auth::id(),
+            'token' => $request->bearerToken()
+        ]);
+
+        if (!Auth::check()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'User not authenticated'
+            ], 401);
+        }
+
         $validator = Validator::make($request->all(), [
-            "student_name" => "required|string",
-            "block" => "required|string",
-            "year_level" => "required|string",
-            "book_name" => "required|string",
+            "book_id" => "required|exists:books,id",
             "date_borrowed" => "required|date",
-            "date_return" => "required|date",
+            "due_date" => "required|date|after:date_borrowed",
         ]);
 
         if($validator->fails()) {
@@ -40,30 +55,48 @@ class BorrowerController extends Controller
             ], 422);
         }
 
+        // Check if book is available
+        $book = Book::findOrFail($request->book_id);
+        if ($book->available_copies <= 0) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Book is not available for borrowing'
+            ], 422);
+        }
+
+        $userId = Auth::id();
+        if (!$userId) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Could not determine user ID'
+            ], 401);
+        }
+
         $borrower = Borrower::create([
-            'student_name' => $request->student_name,
-            'block' => $request->block,
-            'year_level' => $request->year_level,
-            'book_name' => $request->book_name,
+            'user_id' => $userId,
+            'book_id' => $request->book_id,
             'date_borrowed' => $request->date_borrowed,
-            'date_return' => $request->date_return,
+            'due_date' => $request->due_date,
         ]);
+
+        // Update book available copies
+        $book->decrement('available_copies');
 
         return response()->json([
             'success' => true,
-            'message' => 'Borrower created successfully',
+            'message' => 'Book borrowed successfully',
             'data' => new BorrowerResource($borrower)
-        ], 201); // Changed to 201 for created
+        ], 201);
     }
 
     public function show($id)
     {
-        $borrower = Borrower::find($id);
+        $borrower = Borrower::with(['user', 'book'])->find($id);
         
         if(!$borrower) {
             return response()->json([
                 'success' => false,
-                'message' => 'Borrower not found'
+                'message' => 'Borrower record not found'
             ], 404);
         }
         
@@ -77,17 +110,12 @@ class BorrowerController extends Controller
         if(!$borrower) {
             return response()->json([
                 'success' => false,
-                'message' => 'Borrower not found'
+                'message' => 'Borrower record not found'
             ], 404);
         }
 
         $validator = Validator::make($request->all(), [
-            "student_name" => "required|string",
-            "block" => "required|string",
-            "year_level" => "required|string",
-            "book_name" => "required|string",
-            "date_borrowed" => "required|date",
-            "date_return" => "required|date",
+            "date_return" => "required|date|after_or_equal:date_borrowed",
         ]);
 
         if($validator->fails()) {
@@ -98,18 +126,20 @@ class BorrowerController extends Controller
             ], 422);
         }
 
+        // Only allow updating the return date
         $borrower->update([
-           'student_name' => $request->student_name,
-            'block' => $request->block,
-            'year_level' => $request->year_level,
-            'book_name' => $request->book_name,
-            'date_borrowed' => $request->date_borrowed,
             'date_return' => $request->date_return,
         ]);
 
+        // If book is being returned, increment available copies
+        if ($request->date_return) {
+            $book = Book::find($borrower->book_id);
+            $book->increment('available_copies');
+        }
+
         return response()->json([
             'success' => true,
-            'message' => 'Borrower updated successfully',
+            'message' => 'Book return recorded successfully',
             'data' => new BorrowerResource($borrower)
         ], 200);
     }
@@ -121,15 +151,21 @@ class BorrowerController extends Controller
         if(!$borrower) {
             return response()->json([
                 'success' => false,
-                'message' => 'Borrower not found'
+                'message' => 'Borrower record not found'
             ], 404);
+        }
+
+        // If book hasn't been returned, increment available copies
+        if (!$borrower->date_return) {
+            $book = Book::find($borrower->book_id);
+            $book->increment('available_copies');
         }
 
         $borrower->delete();
         
         return response()->json([
             'success' => true,
-            'message' => 'Borrower deleted successfully'
+            'message' => 'Borrower record deleted successfully'
         ], 200);
     }
 }
