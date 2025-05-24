@@ -14,13 +14,30 @@ class AuthController extends Controller
             "name" => 'required|string|max:255',
             "email" => 'required|string|email|max:255|unique:users',
             "password" => 'required|string|min:8|confirmed',
+            "role" => ['required', 'string', 'in:user,admin'],
         ]);
 
-        User::create($data);
+        // For admin registration, require admin code
+        if ($data['role'] === 'admin') {
+            $request->validate([
+                'admin_code' => ['required', 'string', 'in:' . env('ADMIN_REGISTRATION_CODE', 'ADMIN123')],
+            ]);
+        }
+
+        // Hash the password
+        $data['password'] = bcrypt($data['password']);
+
+        // Create user with role
+        $user = User::create($data);
+
+        // Generate token
+        $token = $user->createToken("myToken")->plainTextToken;
 
         return response()->json([
             "status" => true,
             "message" => 'User registered successfully',
+            "token" => $token,
+            "data" => $user
         ], 201);
     }
 

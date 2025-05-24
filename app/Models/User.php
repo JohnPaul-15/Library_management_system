@@ -21,6 +21,7 @@ class User extends Authenticatable
         'email',
         'password',
         'role',
+        'status',
     ];
 
     /**
@@ -41,6 +42,18 @@ class User extends Authenticatable
     protected $casts = [
         'email_verified_at' => 'datetime',
         'password' => 'hashed',
+        'role' => 'string',
+        'status' => 'string',
+    ];
+
+    /**
+     * The attributes that should have default values.
+     *
+     * @var array<string, mixed>
+     */
+    protected $attributes = [
+        'role' => 'user',
+        'status' => 'active',
     ];
 
     /**
@@ -57,5 +70,23 @@ class User extends Authenticatable
     public function isAdmin()
     {
         return $this->role === 'admin';
+    }
+
+    /**
+     * Boot the model.
+     */
+    protected static function boot()
+    {
+        parent::boot();
+
+        // Ensure role and status have default values when creating
+        static::creating(function ($user) {
+            if (!isset($user->role)) {
+                $user->role = 'user';
+            }
+            if (!isset($user->status)) {
+                $user->status = 'active';
+            }
+        });
     }
 }
