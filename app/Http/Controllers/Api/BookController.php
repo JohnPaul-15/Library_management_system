@@ -9,50 +9,79 @@ use App\Http\Resources\BookResource;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Facades\Auth;
 use App\Models\Borrower;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 
 class BookController extends Controller
 {
     public function index()
     {
-        $books = Book::get();
-        if($books)
-        {
-            return BookResource::collection($books);
-        }
-        else 
-        {
-            return response()->json(['message' => 'No books found'], 200);
-        }
+        $books = Book::withCount(['borrowers as borrowed_copies' => function($query) {
+            $query->whereNull('date_return');
+        }])->get();
+
+        return response()->json([
+            'success' => true,
+            'data' => $books->map(function ($book) {
+                $availableCopies = $book->total_copies - $book->borrowed_copies;
+                return [
+                    'id' => $book->id,
+                    'title' => $book->title,
+                    'author' => $book->author,
+                    'publisher' => $book->publisher,
+                    'total_copies' => $book->total_copies,
+                    'available_copies' => $availableCopies,
+                    'status' => $availableCopies > 0 ? 'Available' : 'Not Available'
+                ];
+            })
+        ]);
     }
     public function store(Request $request)
     {
-        $validator = Validator::make($request->all(),[
-            "title" => "required",
-            "author" => "required",
-            "publisher" => "required",
+        $validator = Validator::make($request->all(), [
+            "title" => "required|string|max:255",
+            "author" => "required|string|max:255",
+            "publisher" => "required|string|max:255",
+            "total_copies" => "required|integer|min:1",
         ]);
-        if($validator->fails()){
+
+        if ($validator->fails()) {
             return response()->json([
-            'message' =>'All fields are mandatory',
-            'error' => $validator->errors(),    
-            ],422);
+                'success' => false,
+                'message' => 'Validation failed',
+                'errors' => $validator->errors(),    
+            ], 422);
         }
-        $request->validate([
-            'title' => 'required',
-            'author' => 'required',
-            'publisher' => 'required',
-        ]);
 
-        $books = Book::create([
-            'title' => $request->title,
-            'author' => $request->author,
-            'publisher' => $request->publisher,
-        ]);
+        try {
+            DB::beginTransaction();
 
-        return response()->json([
-            'message' => 'Book created successfully',
-            'data' => new BookResource($books)
-        ], 200);
+            $book = Book::create([
+                'title' => $request->title,
+                'author' => $request->author,
+                'publisher' => $request->publisher,
+                'total_copies' => (int)$request->total_copies,
+                'available_copies' => (int)$request->total_copies,
+            ]);
+
+            DB::commit();
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Book created successfully',
+                'data' => new BookResource($book)
+            ], 201);
+        } catch (\Exception $e) {
+            DB::rollBack();
+            Log::error('Failed to create book', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to create book'
+            ], 500);
+        }
     }
 
     public function show(Book $book)
@@ -67,36 +96,60 @@ class BookController extends Controller
         }
     }
 
-
     public function update(Request $request, Book $book)
     {
-        $validator = Validator::make($request->all(),[
-            "title" => "required",
-            "author" => "required",
-            "publisher" => "required",
+        $validator = Validator::make($request->all(), [
+            "title" => "required|string|max:255",
+            "author" => "required|string|max:255",
+            "publisher" => "required|string|max:255",
+            "total_copies" => "required|integer|min:1",
         ]);
-        if($validator->fails()){
+
+        if ($validator->fails()) {
             return response()->json([
-            'message' =>'All fields are mandatory',
-            'error' => $validator->errors(),    
-            ],422);
+                'success' => false,
+                'message' => 'Validation failed',
+                'errors' => $validator->errors(),    
+            ], 422);
         }
-        $book->update([
-            'title' => 'required',
-            'author' => 'required',
-            'publisher' => 'required',
-        ]);
 
-        $books = Book::create([
-            'title' => $request->title,
-            'author' => $request->author,
-            'publisher' => $request->publisher,
-        ]);
+        try {
+            DB::beginTransaction();
 
-        return response()->json([
-            'message' => 'Book updated successfully',
-            'data' => new BookResource($books)
-        ], 200);
+            // Calculate new available copies if total copies changes
+            $availableCopies = $book->available_copies;
+            if ((int)$request->total_copies !== $book->total_copies) {
+                $difference = (int)$request->total_copies - $book->total_copies;
+                $availableCopies = max(0, $availableCopies + $difference);
+            }
+
+            $book->update([
+                'title' => $request->title,
+                'author' => $request->author,
+                'publisher' => $request->publisher,
+                'total_copies' => (int)$request->total_copies,
+                'available_copies' => $availableCopies,
+            ]);
+
+            DB::commit();
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Book updated successfully',
+                'data' => new BookResource($book)
+            ], 200);
+        } catch (\Exception $e) {
+            DB::rollBack();
+            Log::error('Failed to update book', [
+                'book_id' => $book->id,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to update book'
+            ], 500);
+        }
     }
 
     public function destroy(Book $book)
@@ -126,7 +179,6 @@ class BookController extends Controller
                   ->select('id', 'book_id', 'user_id', 'date_borrowed', 'due_date');
         }])->get();
 
-        // Always return success with data array, even if empty
         return response()->json([
             'success' => true,
             'data' => $borrowedBooks->map(function ($book) {
@@ -141,7 +193,75 @@ class BookController extends Controller
                     'return_date' => $borrower->due_date
                 ];
             })
-        ], 200); // Always return 200 status code
+        ]);
+    }
+
+    public function allBorrowed()
+    {
+        \Log::info('Request headers:', request()->headers->all());
+        \Log::info('Bearer token:', [request()->bearerToken()]);
+
+        if (!Auth::check()) {
+            \Log::warning('Unauthenticated access attempt');
+            return response()->json([
+                'success' => false,
+                'message' => 'Unauthenticated'
+            ], 401);
+        }
+
+        if (!Auth::user()->isAdmin()) {
+            \Log::warning('Non-admin access attempt', [
+                'user_id' => Auth::id(),
+                'user_role' => Auth::user()->role
+            ]);
+            return response()->json([
+                'success' => false,
+                'message' => 'Unauthorized. Admin access required.'
+            ], 403);
+        }
+
+        try {
+            $borrowedBooks = Book::whereHas('borrowers', function ($query) {
+                $query->whereNull('date_return');
+            })->with(['borrowers' => function ($query) {
+                $query->whereNull('date_return')
+                      ->with('user:id,name,email')
+                      ->select('id', 'book_id', 'user_id', 'date_borrowed', 'due_date');
+            }])->get();
+
+            \Log::info('Successfully retrieved borrowed books', [
+                'count' => $borrowedBooks->count(),
+                'user_id' => Auth::id()
+            ]);
+
+            return response()->json([
+                'success' => true,
+                'data' => $borrowedBooks->map(function ($book) {
+                    $borrower = $book->borrowers->first();
+                    return [
+                        'id' => $book->id,
+                        'title' => $book->title,
+                        'author' => $book->author,
+                        'isbn' => $book->isbn,
+                        'status' => 'borrowed',
+                        'borrowed_by' => $borrower->user->name,
+                        'borrower_email' => $borrower->user->email,
+                        'borrowed_at' => $borrower->date_borrowed,
+                        'return_date' => $borrower->due_date
+                    ];
+                })
+            ]);
+        } catch (\Exception $e) {
+            \Log::error('Error fetching borrowed books', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to fetch borrowed books'
+            ], 500);
+        }
     }
 
     public function available()
@@ -175,7 +295,7 @@ class BookController extends Controller
         if ($book->available_copies <= 0) {
             return response()->json([
                 'success' => false,
-                'message' => 'Book is not available for borrowing'
+                'message' => 'No copies available for borrowing'
             ], 422);
         }
 
@@ -192,27 +312,53 @@ class BookController extends Controller
             ], 422);
         }
 
-        // Create borrow record
-        $borrower = Borrower::create([
-            'user_id' => $userId,
-            'book_id' => $book->id,
-            'date_borrowed' => now(),
-            'due_date' => now()->addDays(14), // 2 weeks borrowing period
-        ]);
+        try {
+            DB::beginTransaction();
 
-        // Update book available copies
-        $book->decrement('available_copies');
+            // Create borrow record
+            $borrower = Borrower::create([
+                'user_id' => $userId,
+                'book_id' => $book->id,
+                'date_borrowed' => now(),
+                'due_date' => now()->addDays(14), // 2 weeks borrowing period
+            ]);
 
-        return response()->json([
-            'success' => true,
-            'message' => 'Book borrowed successfully',
-            'data' => [
-                'id' => $book->id,
-                'title' => $book->title,
-                'borrowed_at' => $borrower->date_borrowed,
-                'return_date' => $borrower->due_date
-            ]
-        ]);
+            // Update book available copies
+            $book->decrement('available_copies');
+
+            DB::commit();
+
+            Log::info('Book borrowed successfully', [
+                'book_id' => $book->id,
+                'user_id' => $userId,
+                'borrower_id' => $borrower->id
+            ]);
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Book borrowed successfully',
+                'data' => [
+                    'id' => $book->id,
+                    'title' => $book->title,
+                    'borrowed_at' => $borrower->date_borrowed,
+                    'return_date' => $borrower->due_date
+                ]
+            ]);
+        } catch (\Exception $e) {
+            DB::rollBack();
+            
+            Log::error('Failed to borrow book', [
+                'book_id' => $book->id,
+                'user_id' => $userId,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to borrow book'
+            ], 500);
+        }
     }
 
     public function return(Book $book)
@@ -237,17 +383,46 @@ class BookController extends Controller
             ], 422);
         }
 
-        // Update borrow record
-        $borrower->update([
-            'date_return' => now()
-        ]);
+        try {
+            DB::beginTransaction();
 
-        // Update book available copies
-        $book->increment('available_copies');
+            // Update borrow record
+            $borrower->update([
+                'date_return' => now()
+            ]);
 
-        return response()->json([
-            'success' => true,
-            'message' => 'Book returned successfully'
-        ]);
+            // Ensure we don't exceed total copies
+            if ($book->available_copies < $book->total_copies) {
+                $book->increment('available_copies');
+            }
+
+            DB::commit();
+
+            Log::info('Book returned successfully', [
+                'book_id' => $book->id,
+                'user_id' => $userId,
+                'borrower_id' => $borrower->id
+            ]);
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Book returned successfully'
+            ]);
+        } catch (\Exception $e) {
+            DB::rollBack();
+            
+            Log::error('Failed to return book', [
+                'book_id' => $book->id,
+                'user_id' => $userId,
+                'borrower_id' => $borrower->id,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to return book'
+            ], 500);
+        }
     }
 }

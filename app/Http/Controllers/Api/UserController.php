@@ -74,10 +74,10 @@ class UserController extends Controller
                 'created_at'
             ])->paginate(10);
 
-            return response()->json([
-                'status' => 'success',
-                'data' => $users
-            ]);
+        return response()->json([
+            'status' => 'success',
+            'data' => $users
+        ]);
         } catch (\Exception $e) {
             \Log::error('Error fetching users: ' . $e->getMessage());
             return response()->json([
