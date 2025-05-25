@@ -25,8 +25,23 @@ class DashboardController extends Controller
                 'user_id' => Auth::id(),
                 'user_role' => Auth::user()?->role,
                 'is_admin' => Auth::user()?->isAdmin(),
-                'auth_check' => Auth::check()
+                'auth_check' => Auth::check(),
+                'request_headers' => request()->headers->all(),
+                'bearer_token' => request()->bearerToken()
             ]);
+
+            // Verify admin access
+            if (!Auth::check() || !Auth::user()->isAdmin()) {
+                Log::warning('Non-admin access attempt to dashboard stats', [
+                    'user_id' => Auth::id(),
+                    'user_role' => Auth::user()?->role,
+                    'is_admin' => Auth::user()?->isAdmin()
+                ]);
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Unauthorized. Admin access required.'
+                ], 403);
+            }
 
             // Use raw database values before casting for logging
             $rawTotalBooks = Book::count();
@@ -51,98 +66,29 @@ class DashboardController extends Controller
 
             DB::commit();
 
-            // Prepare response
-            $response = [
-                'success' => true,
-                'data' => $stats,
-                'meta' => [
-                    'execution_time' => microtime(true) - LARAVEL_START,
-                    'memory_usage' => memory_get_usage(true) / 1024 / 1024 . 'MB'
-                ]
-            ];
-
-             // Log the response array before JSON encoding
-            Log::info('Response array before encoding:', $response);
-
-            // Try to encode the response and log any errors
-            $jsonString = json_encode($response, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PARTIAL_OUTPUT_ON_ERROR);
-            if ($jsonString === false) {
-                Log::error('JSON encoding failed', [
-                    'error' => json_last_error_msg(),
-                    'error_code' => json_last_error(),
-                    'data' => $response
-                ]);
-                throw new \RuntimeException('Failed to encode response data: ' . json_last_error_msg());
-            }
-
-             // Remove any potential BOM or whitespace
-            $jsonString = trim($jsonString);
-            if (substr($jsonString, 0, 3) === "\xEF\xBB\xBF") {
-                $jsonString = substr($jsonString, 3);
-            }
-
-            // Verify the JSON is valid by decoding and re-encoding
-            $decoded = json_decode($jsonString, true);
-            if (json_last_error() !== JSON_ERROR_NONE) {
-                Log::error('Invalid JSON after encoding', [
-                    'error' => json_last_error_msg(),
-                    'json_string' => $jsonString
-                ]);
-                throw new \RuntimeException('Generated invalid JSON: ' . json_last_error_msg());
-            }
-
-            // Re-encode to ensure clean output
-            // $jsonString = json_encode($decoded, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-
-            // Log detailed information about the JSON string
-            Log::info('Final JSON string details:', [
-                'json' => $jsonString,
-                'length' => strlen($jsonString),
-                'first_10_chars' => substr($jsonString, 0, 10),
-                'last_10_chars' => substr($jsonString, -10),
-                'hex_dump' => implode(' ', array_map(
-                    function($char) { return sprintf('%02X', ord($char)); },
-                    str_split(substr($jsonString, 0, 50))
-                ))
-            ]);
-
-            // Create and return JsonResponse
-            $response = response()->json($decoded)
-                ->header('X-Content-Type-Options', 'nosniff')
-                ->header('Cache-Control', 'no-cache, no-store, must-revalidate')
-                ->header('Pragma', 'no-cache')
-                ->header('Expires', '0');
-
-            Log::info('Dashboard stats request completed successfully');
-
-            return $response;
-
-        } catch (\Exception $e) {
-            DB::rollBack(); // Rollback transaction on error
-            Log::error('Dashboard stats error', [
-                'error' => $e->getMessage(),
-                'error_code' => $e->getCode(),
-                'file' => $e->getFile(),
-                'line' => $e->getLine(),
-                'trace' => $e->getTraceAsString(),
+            // Log successful response
+            Log::info('Dashboard stats request completed successfully', [
                 'user_id' => Auth::id(),
-                'user_role' => Auth::user()?->role,
-                'is_admin' => Auth::user()?->isAdmin(),
-                'auth_check' => Auth::check(),
-                'request_headers' => request()->headers->all(),
-                'request_method' => request()->method(),
-                'request_url' => request()->fullUrl()
+                'user_role' => Auth::user()->role,
+                'stats' => $stats
             ]);
 
             return response()->json([
+                'success' => true,
+                'data' => $stats
+            ]);
+        } catch (\Exception $e) {
+            DB::rollBack();
+            Log::error('Dashboard stats request failed', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+                'user_id' => Auth::id(),
+                'user_role' => Auth::user()?->role
+            ]);
+            return response()->json([
                 'success' => false,
-                'message' => 'Failed to retrieve dashboard stats',
-                'error' => config('app.debug') ? $e->getMessage() : null,
-                'debug_info' => config('app.debug') ? [
-                    'file' => $e->getFile(),
-                    'line' => $e->getLine(),
-                    'trace' => $e->getTraceAsString()
-                ] : null
+                'message' => 'Failed to fetch dashboard stats',
+                'error' => config('app.debug') ? $e->getMessage() : null
             ], 500);
         }
     }

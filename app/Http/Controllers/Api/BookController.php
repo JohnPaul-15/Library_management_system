@@ -425,4 +425,30 @@ class BookController extends Controller
             ], 500);
         }
     }
+
+    public function availableBooks()
+    {
+        try {
+            $availableBooks = Book::where('available_copies', '>', 0)->get();
+            
+            return response()->json([
+                'success' => true,
+                'data' => $availableBooks->map(function ($book) {
+                    return [
+                        'id' => $book->id,
+                        'title' => $book->title,
+                        'author' => $book->author,
+                        'isbn' => $book->isbn,
+                        'status' => 'available'
+                    ];
+                })
+            ]);
+        } catch (\Exception $e) {
+            \Log::error('Error fetching available books: ' . $e->getMessage());
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to fetch available books'
+            ], 500);
+        }
+    }
 }

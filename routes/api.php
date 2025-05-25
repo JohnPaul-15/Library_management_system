@@ -14,6 +14,7 @@ use App\Models\Book;
 use App\Models\User;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Schema;
+use App\Http\Controllers\Api\BorrowedBookController;
 
 // Public routes
 Route::post('/register', [AuthController::class, 'register']);
@@ -34,6 +35,8 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/books/{book}/return', [BookController::class, 'return']);
     Route::apiResource('students', StudentsController::class);
     Route::apiResource('borrower', BorrowerController::class);
+    Route::get('/user/borrowed', [BorrowedBookController::class, 'index']);
+    Route::get('/available-books', [BookController::class, 'availableBooks']);
 
     // Admin routes
     Route::get('/books/all-borrowed', [BookController::class, 'allBorrowed'])->middleware('auth:sanctum');
