@@ -381,56 +381,72 @@ class BookController extends Controller
         }
     }
 
-    public function return(Book $book)
+    public function return($id)
     {
-        $userId = Auth::id();
-        if (!$userId) {
-            return response()->json([
-                'success' => false,
-                'message' => 'User not authenticated'
-            ], 401);
-        }
-
-        $borrower = $book->getBorrowedByUser($userId);
-        if (!$borrower) {
-            return response()->json([
-                'success' => false,
-                'message' => 'You have not borrowed this book'
-            ], 422);
-        }
-
         try {
+            $user = auth()->user();
+            if (!$user) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Unauthorized'
+                ], 401);
+            }
+
+            $book = Book::findOrFail($id);
+            $borrow = Borrower::where('book_id', $id)
+                ->where('user_id', $user->id)
+                ->whereNull('date_return')
+                ->first();
+
+            if (!$borrow) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'You have not borrowed this book'
+                ], 422);
+            }
+
             DB::beginTransaction();
+            try {
+                // Update the borrow record
+                $borrow->date_return = now();
+                $borrow->save();
 
-            // Update borrow record
-            $borrower->update([
-                'date_return' => now()
-            ]);
+                // Increment available copies
+                $book->increment('available_copies');
 
-            // Update book available copies
-            $book->increment('available_copies');
+                DB::commit();
 
-            DB::commit();
+                Log::info('Book returned successfully', [
+                    'book_id' => $id,
+                    'user_id' => $user->id,
+                    'return_date' => now()
+                ]);
 
-            Log::info('Book returned successfully', [
-                'book_id' => $book->id,
-                'user_id' => $userId,
-                'borrower_id' => $borrower->id
-            ]);
+                return response()->json([
+                    'success' => true,
+                    'message' => 'Book returned successfully',
+                    'data' => [
+                        'book' => $book->fresh(),
+                        'borrow' => $borrow
+                    ]
+                ]);
+            } catch (\Exception $e) {
+                DB::rollBack();
+                Log::error('Error returning book', [
+                    'book_id' => $id,
+                    'user_id' => $user->id,
+                    'error' => $e->getMessage()
+                ]);
 
-            return response()->json([
-                'success' => true,
-                'message' => 'Book returned successfully'
-            ]);
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Failed to return book'
+                ], 500);
+            }
         } catch (\Exception $e) {
-            DB::rollBack();
-            
-            Log::error('Failed to return book', [
-                'book_id' => $book->id,
-                'user_id' => $userId,
-                'borrower_id' => $borrower->id,
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString()
+            Log::error('Error in return method', [
+                'book_id' => $id,
+                'error' => $e->getMessage()
             ]);
 
             return response()->json([
