@@ -29,9 +29,11 @@ class BookController extends Controller
                     'title' => $book->title,
                     'author' => $book->author,
                     'publisher' => $book->publisher,
+                    'isbn' => $book->isbn,
                     'total_copies' => $book->total_copies,
                     'available_copies' => $availableCopies,
-                    'status' => $availableCopies > 0 ? 'Available' : 'Not Available'
+                    'status' => $availableCopies > 0 ? 'available' : 'borrowed',
+                    'borrowed_by' => $book->getCurrentBorrower()?->user_id
                 ];
             })
         ]);
@@ -276,13 +278,14 @@ class BookController extends Controller
                     'title' => $book->title,
                     'author' => $book->author,
                     'isbn' => $book->isbn,
-                    'status' => 'available'
+                    'status' => 'available',
+                    'available_copies' => $book->available_copies
                 ];
             })
         ]);
     }
 
-    public function borrow(Book $book)
+    public function borrow(Book $book, Request $request)
     {
         $userId = Auth::id();
         if (!$userId) {
@@ -292,71 +295,88 @@ class BookController extends Controller
             ], 401);
         }
 
-        if ($book->available_copies <= 0) {
+        $validator = Validator::make($request->all(), [
+            'copies' => 'required|integer|min:1',
+            'return_date' => 'required|date|after:today',
+        ]);
+
+        if ($validator->fails()) {
             return response()->json([
                 'success' => false,
-                'message' => 'No copies available for borrowing'
+                'message' => 'Validation failed',
+                'errors' => $validator->errors()
+            ], 422);
+        }
+
+        $numCopies = $request->copies;
+        $returnDate = $request->return_date;
+
+        if (!$book->canBorrowCopies($numCopies)) {
+            return response()->json([
+                'success' => false,
+                'message' => "Only {$book->available_copies} copies available for borrowing"
             ], 422);
         }
 
         // Check if user already has this book borrowed
-        $existingBorrow = Borrower::where('user_id', $userId)
-            ->where('book_id', $book->id)
-            ->whereNull('date_return')
-            ->first();
-
-        if ($existingBorrow) {
+        $currentBorrowedCopies = $book->getBorrowedCopiesByUser($userId);
+        if ($currentBorrowedCopies > 0) {
             return response()->json([
                 'success' => false,
-                'message' => 'You have already borrowed this book'
+                'message' => "You have already borrowed {$currentBorrowedCopies} copies of this book"
             ], 422);
         }
 
         try {
             DB::beginTransaction();
 
-            // Create borrow record
-            $borrower = Borrower::create([
-                'user_id' => $userId,
-                'book_id' => $book->id,
-                'date_borrowed' => now(),
-                'due_date' => now()->addDays(14), // 2 weeks borrowing period
-            ]);
+            // Create borrow records for each copy
+            for ($i = 0; $i < $numCopies; $i++) {
+                Borrower::create([
+                    'user_id' => $userId,
+                    'book_id' => $book->id,
+                    'date_borrowed' => now(),
+                    'due_date' => $returnDate,
+                ]);
+            }
 
             // Update book available copies
-            $book->decrement('available_copies');
+            $book->decrement('available_copies', $numCopies);
 
             DB::commit();
 
-            Log::info('Book borrowed successfully', [
+            Log::info('Books borrowed successfully', [
                 'book_id' => $book->id,
                 'user_id' => $userId,
-                'borrower_id' => $borrower->id
+                'copies' => $numCopies,
+                'return_date' => $returnDate
             ]);
 
             return response()->json([
                 'success' => true,
-                'message' => 'Book borrowed successfully',
+                'message' => "Successfully borrowed {$numCopies} copies",
                 'data' => [
                     'id' => $book->id,
                     'title' => $book->title,
-                    'borrowed_at' => $borrower->date_borrowed,
-                    'return_date' => $borrower->due_date
+                    'copies' => $numCopies,
+                    'borrowed_at' => now(),
+                    'return_date' => $returnDate
                 ]
             ]);
         } catch (\Exception $e) {
             DB::rollBack();
             
-            Log::error('Failed to borrow book', [
+            Log::error('Failed to borrow books', [
                 'book_id' => $book->id,
                 'user_id' => $userId,
+                'copies' => $numCopies,
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString()
             ]);
 
             return response()->json([
                 'success' => false,
-                'message' => 'Failed to borrow book'
+                'message' => 'Failed to borrow books'
             ], 500);
         }
     }
@@ -371,11 +391,7 @@ class BookController extends Controller
             ], 401);
         }
 
-        $borrower = Borrower::where('user_id', $userId)
-            ->where('book_id', $book->id)
-            ->whereNull('date_return')
-            ->first();
-
+        $borrower = $book->getBorrowedByUser($userId);
         if (!$borrower) {
             return response()->json([
                 'success' => false,
@@ -391,10 +407,8 @@ class BookController extends Controller
                 'date_return' => now()
             ]);
 
-            // Ensure we don't exceed total copies
-            if ($book->available_copies < $book->total_copies) {
-                $book->increment('available_copies');
-            }
+            // Update book available copies
+            $book->increment('available_copies');
 
             DB::commit();
 
